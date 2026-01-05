@@ -1,0 +1,102 @@
+name: Daily Worklog
+
+on:
+  # 매일 KST 오전 2시 (UTC 17시) 실행
+  schedule:
+    - cron: '0 17 * * *'
+
+  # 수동 실행 지원
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: '대상 날짜 (YYYY-MM-DD, 비워두면 어제)'
+        required: false
+        default: ''
+      skip_slack:
+        description: 'Slack 전송 건너뛰기'
+        type: boolean
+        required: false
+        default: false
+
+env:
+  TZ: Asia/Seoul
+
+jobs:
+  generate-worklog:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 전체 히스토리 필요
+
+      - name: Setup environment
+        run: |
+          echo "현재 시간 (KST): $(TZ=Asia/Seoul date)"
+          echo "대상 날짜: ${TARGET_DATE:-어제}"
+
+      - name: Generate worklog
+        id: generate
+        run: |
+          chmod +x ./run.sh ./src/*.sh
+
+          # 날짜 인자 설정
+          ARGS=""
+          if [[ -n "${{ github.event.inputs.target_date }}" ]]; then
+            ARGS="-d ${{ github.event.inputs.target_date }}"
+          fi
+
+          # Slack 전송 여부
+          if [[ "${{ github.event.inputs.skip_slack }}" == "true" ]]; then
+            ARGS="$ARGS -g"
+          fi
+
+          # 실행
+          ./run.sh $ARGS
+
+          # 생성된 파일 경로 저장
+          WORKLOG_FILE=$(ls -t worklog/*.md 2>/dev/null | head -1)
+          echo "worklog_file=$WORKLOG_FILE" >> $GITHUB_OUTPUT
+
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL || '#general' }}
+
+      - name: Upload worklog artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: worklog-${{ github.run_id }}
+          path: worklog/*.md
+          retention-days: 30
+
+      - name: Commit worklog (optional)
+        if: github.event_name == 'schedule'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # 새 업무일지가 있으면 커밋
+          if git diff --quiet worklog/; then
+            echo "변경사항 없음"
+          else
+            git add worklog/
+            git commit -m "docs: 업무일지 자동 생성 ($(date +%Y-%m-%d))"
+            git push
+          fi
+
+  notify-on-failure:
+    runs-on: ubuntu-latest
+    needs: generate-worklog
+    if: failure()
+
+    steps:
+      - name: Notify failure to Slack
+        run: |
+          if [[ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]]; then
+            curl -X POST -H 'Content-type: application/json' \
+              --data '{
+                "text": "⚠️ 업무일지 자동 생성 실패\n워크플로우: ${{ github.workflow }}\n실행: ${{ github.run_id }}"
+              }' \
+              ${{ secrets.SLACK_WEBHOOK_URL }}
+          fi
