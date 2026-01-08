@@ -1,14 +1,19 @@
 """
-api.py - FastAPI HTTP 서버
+api.py - FastAPI HTTP 서버 + AWS Lambda 핸들러
 
 이 파일은 HTTP API 서버를 구현합니다.
-n8n, Slack, 또는 다른 서비스에서 이 API를 호출해서 업무일지를 생성할 수 있습니다.
+로컬에서는 uvicorn으로, AWS Lambda에서는 Mangum 어댑터로 실행됩니다.
 
 FastAPI란?
 - 파이썬으로 API 서버를 만드는 현대적인 프레임워크
 - 자동으로 API 문서(Swagger) 생성
 - 빠른 성능 (비동기 지원)
 - 타입 힌트 기반 자동 검증
+
+Mangum이란?
+- AWS Lambda에서 ASGI 앱(FastAPI)을 실행하게 해주는 어댑터
+- Lambda의 이벤트를 HTTP 요청으로 변환
+- API Gateway, ALB 등과 연동 가능
 """
 
 # ============================================================
@@ -362,7 +367,31 @@ async def list_worklogs():
 
 
 # ============================================================
-# 서버 실행
+# AWS Lambda 핸들러
+# ============================================================
+
+# Mangum: FastAPI를 AWS Lambda에서 실행하게 해주는 어댑터
+# Lambda가 받은 이벤트를 HTTP 요청으로 변환해서 FastAPI에 전달
+try:
+    from mangum import Mangum
+
+    # Lambda 핸들러 생성
+    # 이 handler를 Lambda 함수의 진입점으로 설정
+    # Lambda 설정: Handler = core.api.handler
+    handler = Mangum(
+        app,
+        lifespan="off",  # Lambda는 수명주기 이벤트 불필요
+        api_gateway_base_path=None  # API Gateway 기본 경로 (필요시 설정)
+    )
+
+except ImportError:
+    # Mangum이 없으면 (로컬 개발 환경)
+    # handler를 None으로 설정
+    handler = None
+
+
+# ============================================================
+# 로컬 서버 실행
 # ============================================================
 
 # 이 파일을 직접 실행할 때 서버 시작
