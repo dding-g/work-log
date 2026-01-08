@@ -12,14 +12,10 @@ on:
         description: '대상 날짜 (YYYY-MM-DD, 비워두면 어제)'
         required: false
         default: ''
-      skip_slack:
-        description: 'Slack 전송 건너뛰기'
-        type: boolean
-        required: false
-        default: false
 
 env:
   TZ: Asia/Seoul
+  PYTHON_VERSION: '3.11'
 
 jobs:
   generate-worklog:
@@ -31,37 +27,48 @@ jobs:
         with:
           fetch-depth: 0  # 전체 히스토리 필요
 
-      - name: Setup environment
-        run: |
-          echo "현재 시간 (KST): $(TZ=Asia/Seoul date)"
-          echo "대상 날짜: ${TARGET_DATE:-어제}"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
 
-      - name: Generate worklog
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          # LLM 라이브러리 (선택적)
+          pip install openai anthropic || true
+
+      - name: Generate worklog via API
         id: generate
-        run: |
-          chmod +x ./run.sh ./src/*.sh
-
-          # 날짜 인자 설정
-          ARGS=""
-          if [[ -n "${{ github.event.inputs.target_date }}" ]]; then
-            ARGS="-d ${{ github.event.inputs.target_date }}"
-          fi
-
-          # Slack 전송 여부
-          if [[ "${{ github.event.inputs.skip_slack }}" == "true" ]]; then
-            ARGS="$ARGS -g"
-          fi
-
-          # 실행
-          ./run.sh $ARGS
-
-          # 생성된 파일 경로 저장
-          WORKLOG_FILE=$(ls -t worklog/*.md 2>/dev/null | head -1)
-          echo "worklog_file=$WORKLOG_FILE" >> $GITHUB_OUTPUT
-
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL || '#general' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # API 서버를 백그라운드로 실행
+          python -m uvicorn core.api:app --host 127.0.0.1 --port 8000 &
+          sleep 5  # 서버 시작 대기
+
+          # 날짜 설정
+          if [ -n "${{ github.event.inputs.target_date }}" ]; then
+            TARGET_DATE="${{ github.event.inputs.target_date }}"
+          else
+            TARGET_DATE=$(date -d "yesterday" +%Y-%m-%d)
+          fi
+
+          echo "대상 날짜: $TARGET_DATE"
+
+          # API 호출
+          curl -X POST http://127.0.0.1:8000/generate \
+            -H "Content-Type: application/json" \
+            -d "{\"target_date\": \"$TARGET_DATE\", \"use_ai_summary\": true}" \
+            -o response.json
+
+          # 결과 확인
+          cat response.json
+
+          # 서버 종료
+          pkill -f uvicorn || true
 
       - name: Upload worklog artifact
         uses: actions/upload-artifact@v4
@@ -70,33 +77,33 @@ jobs:
           path: worklog/*.md
           retention-days: 30
 
-      - name: Commit worklog (optional)
+      - name: Commit worklog
         if: github.event_name == 'schedule'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # 새 업무일지가 있으면 커밋
-          if git diff --quiet worklog/; then
-            echo "변경사항 없음"
-          else
+          if [ -n "$(git status worklog/ --porcelain)" ]; then
             git add worklog/
             git commit -m "docs: 업무일지 자동 생성 ($(date +%Y-%m-%d))"
             git push
+          else
+            echo "변경사항 없음"
           fi
 
-  notify-on-failure:
-    runs-on: ubuntu-latest
-    needs: generate-worklog
-    if: failure()
-
-    steps:
-      - name: Notify failure to Slack
+      - name: Send to Slack
+        if: success() && secrets.SLACK_WEBHOOK_URL
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          if [[ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]]; then
-            curl -X POST -H 'Content-type: application/json' \
-              --data '{
-                "text": "⚠️ 업무일지 자동 생성 실패\n워크플로우: ${{ github.workflow }}\n실행: ${{ github.run_id }}"
-              }' \
-              ${{ secrets.SLACK_WEBHOOK_URL }}
+          # 최신 업무일지 내용 가져오기
+          WORKLOG_FILE=$(ls -t worklog/*.md 2>/dev/null | head -1)
+
+          if [ -f "$WORKLOG_FILE" ]; then
+            # 파일 내용을 JSON 이스케이프
+            CONTENT=$(cat "$WORKLOG_FILE" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+
+            curl -X POST "$SLACK_WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"text\": ${CONTENT}}"
           fi

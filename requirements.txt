@@ -1,0 +1,56 @@
+# ============================================================
+# Work-Log Automation 의존성 목록
+# ============================================================
+#
+# 설치 방법: pip install -r requirements.txt
+#
+# 각 라이브러리 설명:
+#
+
+# ----- 필수 (Required) -----
+
+# FastAPI: 웹 API 프레임워크
+# 빠르고 현대적인 API 서버를 쉽게 만들 수 있음
+fastapi>=0.104.0
+
+# Uvicorn: ASGI 서버 (FastAPI 실행에 필요)
+# [standard]: 추가 기능 포함 (자동 재시작, 컬러 로그 등)
+uvicorn[standard]>=0.24.0
+
+# Pydantic: 데이터 검증 및 설정 관리
+# FastAPI가 내부적으로 사용 (타입 힌트 기반 검증)
+pydantic>=2.5.0
+
+# GitPython: Git을 파이썬으로 다루는 라이브러리
+# 커밋 조회, diff 분석 등에 사용
+gitpython>=3.1.40
+
+
+# ----- LLM 연동 (선택) -----
+
+# OpenAI: GPT 모델 사용 시 필요
+# 설치: pip install openai
+# openai>=1.3.0
+
+# Anthropic: Claude 모델 사용 시 필요
+# 설치: pip install anthropic
+# anthropic>=0.7.0
+
+
+# ----- 개발용 (Development) -----
+
+# pytest: 테스트 프레임워크
+# 설치: pip install pytest
+# pytest>=7.4.0
+
+# httpx: 비동기 HTTP 클라이언트 (테스트용)
+# FastAPI TestClient에 필요
+# httpx>=0.25.0
+
+# black: 코드 포맷터
+# pip install black
+# black>=23.0.0
+
+# isort: import 정렬
+# pip install isort
+# isort>=5.12.0
