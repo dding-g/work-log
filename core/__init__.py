@@ -23,7 +23,6 @@ from core.models import (
     GenerateRequest,
     GenerateResponse
 )
-from core.git_analyzer import GitAnalyzer
 from core.generator import MarkdownGenerator
 from core.summarizer import (
     BaseSummarizer,
@@ -32,3 +31,10 @@ from core.summarizer import (
     FallbackSummarizer,
     get_summarizer
 )
+
+# GitAnalyzer는 로컬 환경에서만 사용 (GitPython 필요)
+# Lambda 환경에서는 github_client.py 사용
+try:
+    from core.git_analyzer import GitAnalyzer
+except ImportError:
+    GitAnalyzer = None  # Lambda 환경에서는 사용 불가
