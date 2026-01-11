@@ -1,79 +1,47 @@
 # ============================================================
-# Python
+# terraform.tfvars.example
 # ============================================================
-
-# 바이트코드 캐시
-__pycache__/
-*.py[cod]
-*$py.class
-
-# 가상환경
-venv/
-.venv/
-env/
-.env/
-
-# 배포 패키지
-*.egg-info/
-dist/
-build/
+#
+# 사용법:
+# 1. 이 파일을 terraform.tfvars로 복사
+# 2. 실제 값으로 변경
+# 3. terraform.tfvars는 .gitignore에 포함되어 커밋되지 않음
+#
+# cp terraform.tfvars.example terraform.tfvars
+#
 
 # ============================================================
-# 환경 설정 (민감 정보)
+# AWS 인증 (필수)
 # ============================================================
 
-# 환경 변수 파일 (API 키 포함)
-.env
-
-# 설정 파일
-config/config.yaml
-config/*.local.yaml
+aws_access_key = "YOUR_AWS_ACCESS_KEY"
+aws_secret_key = "YOUR_AWS_SECRET_KEY"
+aws_region     = "ap-northeast-2"
 
 # ============================================================
-# IDE / 에디터
+# 프로젝트 설정
 # ============================================================
 
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
+project_name  = "work-log"
+function_name = "work-log-api"
 
 # ============================================================
-# OS
+# Lambda 설정
 # ============================================================
 
-.DS_Store
-Thumbs.db
+lambda_memory_size  = 512
+lambda_timeout      = 30
+lambda_architecture = "x86_64"
 
 # ============================================================
-# 프로젝트 특정
+# 환경 변수 (민감정보)
 # ============================================================
 
-# 생성된 업무일지 (필요시 주석 해제)
-# worklog/*.md
-
-# 로그 파일
-*.log
-logs/
-
-# 임시 파일
-tmp/
-temp/
+openai_api_key    = "sk-your-openai-api-key"
+anthropic_api_key = "sk-ant-your-anthropic-api-key"
 
 # ============================================================
-# Terraform
+# CloudWatch 설정
 # ============================================================
 
-terraform/.terraform/
-terraform/*.tfstate
-terraform/*.tfstate.*
-terraform/*.tfvars
-terraform/.terraform.lock.hcl
-terraform/lambda_placeholder.zip
-terraform/*.tf.bak
-terraform/tfplan
-
-# Lambda 패키지
-lambda-package.zip
-package/
+log_retention_days = 14

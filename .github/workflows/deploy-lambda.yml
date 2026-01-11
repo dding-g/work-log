@@ -1,22 +1,17 @@
 # ============================================================
-# AWS Lambda 배포 워크플로우
+# AWS Lambda ZIP 배포 워크플로우
 # ============================================================
 #
 # 이 워크플로우는:
-# 1. Docker 이미지 빌드
-# 2. Amazon ECR에 이미지 푸시
+# 1. Python 의존성 설치
+# 2. Lambda ZIP 패키지 생성
 # 3. Lambda 함수 업데이트
 #
 # 필요한 GitHub Secrets:
 # - AWS_ACCESS_KEY_ID: AWS 액세스 키
 # - AWS_SECRET_ACCESS_KEY: AWS 시크릿 키
 # - AWS_REGION: AWS 리전 (예: ap-northeast-2)
-# - ECR_REPOSITORY: ECR 저장소 이름 (예: work-log-api)
 # - LAMBDA_FUNCTION_NAME: Lambda 함수 이름
-#
-# 선택적 Secrets (LLM 사용 시):
-# - OPENAI_API_KEY: OpenAI API 키
-# - ANTHROPIC_API_KEY: Anthropic API 키
 #
 
 name: Deploy to Lambda
@@ -34,29 +29,19 @@ on:
     # 특정 파일이 변경될 때만 실행
     paths:
       - 'core/**'
-      - 'Dockerfile'
-      - 'requirements.txt'
+      - 'requirements-lambda.txt'
       - '.github/workflows/deploy-lambda.yml'
 
   # 수동 실행 지원
   workflow_dispatch:
-    inputs:
-      environment:
-        description: '배포 환경'
-        required: true
-        default: 'production'
-        type: choice
-        options:
-          - production
-          - staging
 
 # ============================================================
 # 환경 변수
 # ============================================================
 
 env:
-  # AWS 리전 (Secrets에서 가져오거나 기본값 사용)
   AWS_REGION: ${{ secrets.AWS_REGION || 'ap-northeast-2' }}
+  PYTHON_VERSION: '3.11'
 
 # ============================================================
 # 작업 정의
@@ -64,18 +49,21 @@ env:
 
 jobs:
   deploy:
-    name: Build and Deploy
+    name: Build and Deploy ZIP
     runs-on: ubuntu-latest
-
-    # 배포 환경 설정 (GitHub Environments 사용 시)
-    # environment: ${{ github.event.inputs.environment || 'production' }}
 
     steps:
       # ----- 1. 코드 체크아웃 -----
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ----- 2. AWS 자격 증명 설정 -----
+      # ----- 2. Python 설정 -----
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # ----- 3. AWS 자격 증명 설정 -----
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -83,96 +71,63 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ----- 3. ECR 로그인 -----
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      # ----- 4. 의존성 설치 및 패키징 -----
+      - name: Install dependencies and create package
+        run: |
+          echo "의존성 설치 중..."
 
-      # ----- 4. Docker 메타데이터 설정 -----
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}
-          tags: |
-            # latest 태그
-            type=raw,value=latest
-            # Git SHA (짧은 형태)
-            type=sha,prefix=
-            # 브랜치 이름
-            type=ref,event=branch
-            # 타임스탬프
-            type=raw,value={{date 'YYYYMMDD-HHmmss'}}
+          # 패키지 디렉토리 생성
+          mkdir -p package
 
-      # ----- 5. Docker Buildx 설정 -----
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+          # Lambda용 의존성 설치 (boto3는 Lambda에 기본 포함)
+          pip install -r requirements-lambda.txt -t package/
 
-      # ----- 6. Docker 이미지 빌드 및 푸시 -----
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Docker 레이어 캐싱 (빌드 속도 향상)
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          # 플랫폼 지정 (Lambda는 x86_64 또는 arm64)
-          platforms: linux/amd64
+          # core 디렉토리 복사
+          cp -r core package/
 
-      # ----- 7. Lambda 함수 업데이트 -----
+          # __init__.py 생성 (모듈 인식용)
+          touch package/core/__init__.py
+
+          echo "패키지 구조:"
+          ls -la package/
+          ls -la package/core/
+
+      # ----- 5. ZIP 파일 생성 -----
+      - name: Create ZIP package
+        run: |
+          cd package
+          zip -r ../lambda-package.zip .
+          cd ..
+
+          echo "ZIP 파일 정보:"
+          ls -lh lambda-package.zip
+
+          # ZIP 크기 확인 (250MB 제한)
+          SIZE=$(stat -c%s lambda-package.zip 2>/dev/null || stat -f%z lambda-package.zip)
+          echo "ZIP 크기: $SIZE bytes"
+
+          if [ $SIZE -gt 262144000 ]; then
+            echo "❌ ZIP 파일이 250MB를 초과합니다!"
+            exit 1
+          fi
+
+      # ----- 6. Lambda 함수 업데이트 -----
       - name: Update Lambda function
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           LAMBDA_FUNCTION_NAME: ${{ secrets.LAMBDA_FUNCTION_NAME }}
         run: |
-          # 최신 이미지 URI 생성
-          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
-
           echo "Lambda 함수 업데이트 중..."
-          echo "이미지: ${IMAGE_URI}"
           echo "함수: ${LAMBDA_FUNCTION_NAME}"
 
-          # Lambda 함수의 컨테이너 이미지 업데이트
+          # Lambda 함수 코드 업데이트
           aws lambda update-function-code \
             --function-name "${LAMBDA_FUNCTION_NAME}" \
-            --image-uri "${IMAGE_URI}" \
+            --zip-file fileb://lambda-package.zip \
             --publish
 
           echo "Lambda 함수 업데이트 완료!"
 
-      # ----- 8. Lambda 환경변수 업데이트 (선택) -----
-      - name: Update Lambda environment variables
-        if: ${{ secrets.OPENAI_API_KEY || secrets.ANTHROPIC_API_KEY }}
-        env:
-          LAMBDA_FUNCTION_NAME: ${{ secrets.LAMBDA_FUNCTION_NAME }}
-        run: |
-          # 환경변수 JSON 생성
-          ENV_VARS="{\"Variables\":{"
-
-          # OpenAI API 키
-          if [ -n "${{ secrets.OPENAI_API_KEY }}" ]; then
-            ENV_VARS="${ENV_VARS}\"OPENAI_API_KEY\":\"${{ secrets.OPENAI_API_KEY }}\","
-          fi
-
-          # Anthropic API 키
-          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
-            ENV_VARS="${ENV_VARS}\"ANTHROPIC_API_KEY\":\"${{ secrets.ANTHROPIC_API_KEY }}\","
-          fi
-
-          # 마지막 쉼표 제거 및 JSON 닫기
-          ENV_VARS="${ENV_VARS%,}}}"
-
-          # Lambda 환경변수 업데이트
-          aws lambda update-function-configuration \
-            --function-name "${LAMBDA_FUNCTION_NAME}" \
-            --environment "${ENV_VARS}" || true
-
-      # ----- 9. 배포 대기 -----
+      # ----- 7. 배포 대기 -----
       - name: Wait for Lambda update
         env:
           LAMBDA_FUNCTION_NAME: ${{ secrets.LAMBDA_FUNCTION_NAME }}
@@ -185,59 +140,36 @@ jobs:
 
           echo "Lambda 함수가 활성화되었습니다!"
 
-      # ----- 10. 헬스 체크 (선택) -----
-      - name: Health check
-        if: ${{ secrets.LAMBDA_FUNCTION_URL }}
+      # ----- 8. Lambda 테스트 호출 -----
+      - name: Test Lambda invocation
+        env:
+          LAMBDA_FUNCTION_NAME: ${{ secrets.LAMBDA_FUNCTION_NAME }}
         run: |
-          echo "헬스 체크 실행 중..."
+          echo "Lambda 테스트 호출 중..."
 
-          # Lambda Function URL로 헬스 체크
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-            "${{ secrets.LAMBDA_FUNCTION_URL }}/health" || echo "000")
+          # 테스트 이벤트로 Lambda 호출
+          aws lambda invoke \
+            --function-name "${LAMBDA_FUNCTION_NAME}" \
+            --payload '{"test": true}' \
+            --cli-binary-format raw-in-base64-out \
+            response.json
 
-          if [ "$RESPONSE" = "200" ]; then
-            echo "✅ 헬스 체크 성공!"
+          echo "Lambda 응답:"
+          cat response.json
+
+          # 응답 확인
+          if grep -q '"statusCode": 200' response.json || grep -q '"statusCode":200' response.json; then
+            echo "✅ Lambda 테스트 성공!"
           else
-            echo "⚠️ 헬스 체크 실패 (HTTP $RESPONSE)"
-            # 실패해도 워크플로우는 계속 진행 (경고만)
+            echo "⚠️ Lambda 응답 확인 필요"
           fi
 
-      # ----- 11. 배포 완료 알림 -----
+      # ----- 9. 배포 완료 알림 -----
       - name: Deployment summary
         run: |
           echo "=============================================="
           echo "🚀 배포 완료!"
           echo "=============================================="
           echo "Lambda 함수: ${{ secrets.LAMBDA_FUNCTION_NAME }}"
-          echo "이미지: ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:latest"
           echo "시각: $(date)"
           echo "=============================================="
-
-
-  # ============================================================
-  # 롤백 작업 (수동 트리거용)
-  # ============================================================
-
-  rollback:
-    name: Rollback (Manual)
-    runs-on: ubuntu-latest
-    # 수동으로만 실행 가능하도록 조건 설정
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'rollback' }}
-
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: List Lambda versions
-        env:
-          LAMBDA_FUNCTION_NAME: ${{ secrets.LAMBDA_FUNCTION_NAME }}
-        run: |
-          echo "Lambda 버전 목록:"
-          aws lambda list-versions-by-function \
-            --function-name "${LAMBDA_FUNCTION_NAME}" \
-            --query 'Versions[-5:].[Version, Description, LastModified]' \
-            --output table
