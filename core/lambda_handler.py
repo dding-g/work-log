@@ -184,7 +184,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         # EventBridge 스케줄 이벤트: 환경변수에서 설정 가져오기
         owner = default_owner
         repo = default_repo
-        target_date = date.today()  # 오늘 날짜
+        target_date = date.today() - timedelta(days=1)  # 어제 날짜
         use_ai_summary = os.getenv("USE_AI_SUMMARY", "true").lower() == "true"
         author = os.getenv("GITHUB_AUTHOR")
     else:
@@ -196,7 +196,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         if target_date_str:
             target_date = date.fromisoformat(target_date_str)
         else:
-            target_date = date.today()
+            target_date = date.today() - timedelta(days=1)  # 어제 날짜
 
         use_ai_summary = event.get("use_ai_summary", True)
         author = event.get("author")
@@ -222,11 +222,11 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
 # 테스트용 코드
 if __name__ == "__main__":
-    # 로컬 테스트
+    # 로컬 테스트 (어제 날짜 기준)
     test_event = {
         "owner": "ddingg",
         "repo": "work-log",
-        "target_date": str(date.today())
+        "target_date": str(date.today() - timedelta(days=1))
     }
 
     result = handler(test_event, None)
